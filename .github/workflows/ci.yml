@@ -1,5 +1,9 @@
 # 骏大祭剧本仓 CI：需要把引擎仓检出到并列目录（默认 `../umaai_next`，仅作 path 依赖编译）。
 # 数据自持：引擎静态数据已拷入统一数据目录 `data/`（含双配置默认层），测试零参数即跑。
+# 引擎是公开仓 `umaai-project/umaai-next`，默认 `GITHUB_TOKEN` 即可读；仓转私有后再配
+# `ENGINE_REPO_TOKEN` secret（下面表达式会自动优先用它）。
+# 工具链钉引擎 `rust-toolchain.toml` 的 1.99.0：更旧的 cargo 解析不动引擎清单（workspace
+# `default-features` 覆盖），会把三条命令全部带崩。
 name: CI
 
 on:
@@ -14,16 +18,19 @@ jobs:
       - name: Checkout engine repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/umaai-next
+          repository: umaai-project/umaai-next
           path: umaai_next
-          token: ${{ secrets.ENGINE_REPO_TOKEN }}
-        continue-on-error: true
-      - uses: dtolnay/rust-toolchain@stable
+          token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
+      # path 依赖写的是 `../umaai_next`（工作区的并列目录），actions/checkout 只能检进
+      # 工作区内，所以检出后补一个并列位置的软链接；引擎缺失时这里就该报错，不再 continue-on-error
+      - name: Link engine as sibling
+        run: ln -s "$GITHUB_WORKSPACE/umaai_next" "$GITHUB_WORKSPACE/../umaai_next"
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt, clippy
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
-        run: cargo test --release
+        run: cargo test --workspace --release
