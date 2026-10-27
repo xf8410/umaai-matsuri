@@ -10,7 +10,7 @@
 
 | crate | 测试面 | 现状 |
 |---|---|---|
-| `matsuri-core` | 内联单测 + `tests/mechanics.rs`（机制集成） | 内联单测已有；机制集成待补 |
+| `matsuri-core` | 内联单测 + `tests/mechanics.rs`（机制集成） | 数据层 11 例 + 配置 / 阶段 / 训练员已有；机制集成待补（等 §4 缺口收口） |
 | `matsuri-sim` | `tests/baseline.rs`（固定种子基线） | 待补 |
 | `matsuri-cli` | `tests/smoke.rs`（一局冒烟 + 可复现） | 待补 |
 | `matsuri-ai` / `matsuri-tools` | 骨架，暂无 | — |
@@ -19,10 +19,22 @@
 
 | 文件 | 用例 | 守门内容 |
 |---|---|---|
-| `core/src/data.rs` | `parse_sample_ok` / `reject_wrong_training_count` / `reject_bad_row_width` | 资产解析 / 5 训练 / 7 值行 |
+| `core/src/data.rs` | `load_repo_data` | 仓内 `data/scenario_matsuri.json` 按 schema 读通，逐表核行数（担当 5 / 演目效果 66 / 排程 3 / 窗口 6 / 教诲 10 / 教诲效果 153 / 転成 9 / 発表会 20 / 本番 4 / 出行 10 / 稽古基础值 5），并核对 turn 已转 **0 基**（`23 / 47 / 67`、`2 / 11 / 23 / 35 / 47 / 59`） |
+| `core/src/data.rs` | `effect_values_land_in_different_columns` | 读取纪律：同为 `effect_type = 13`，教诲 `101` 只填第 4 列、`601` 同填第 2 与第 4 列 → 禁止按列硬编码（intake §4 落库口径 3，表见 §3.4） |
+| `core/src/data.rs` | `reject_unknown_field` | `deny_unknown_fields`：资产多一个键即报错 |
+| `core/src/data.rs` | `reject_missing_act_level` | `act_effect` 缺任一 Lv1–10 档位即报错 |
+| `core/src/data.rs` | `reject_unobserved_result_state` | 発表会 `result_state = 3` 未观察到 → 载入期越界报错，不静默兜底 |
+| `core/src/data.rs` | `reject_unsorted_schedule` | `schedule.id` 连续、turn 严格升序且在 `0..=MAX_TURN` 内 |
+| `core/src/data.rs` | `reject_dangling_advice_id` | `advice_effect` / `fusion_effect` 的 `advice_id` 必须在 `advice` 表内（跨表引用完整性） |
+| `core/src/data.rs` | `reject_unknown_act_command` | `act_training_basic` 的命令必须在担当表 `command_id` 内（防串表） |
+| `core/src/data.rs` | `reject_zero_gauge_max` | `act_gauge_max = 0` 会让演目稽古永不点亮 → 报错 |
+| `core/src/data.rs` | `reject_wrong_training_count` / `reject_bad_row_width` | 训练基础值表形状：5 个训练、每档 7 值 |
 | `core/src/config.rs` | `parse_base_ok` / `overlay_replaces_list` / `unknown_key_rejected` / `out_of_range_index_rejected` | 默认层 / 覆盖层 / 未知键 / 下标 |
 | `core/src/game/stage.rs` | `next_chain` / `stage_ids_are_stable` | 阶段链 / 阶段号稳定 |
 | `core/src/trainer.rs` | `preferred_training_wraps` | 样例训练员轮转 |
+
+> 数据层单测只守「读得到 + 校验得住 + 口径不漂移」；**机制结算用例在对应机制收口后才写**
+> （不用测试代替机制确认，也不写按猜测实现的断言）。
 
 ## 3. 机制集成（`core/tests/mechanics.rs`）
 
@@ -41,6 +53,19 @@
 
 - 重录命令：`<cargo ... baseline --update>`（S9 落地）
 - 数值占位替换后必须重录，并在 `glossary.md` 记影响面。
+- **工具链**：引擎清单含 `umasim = { workspace = true, default-features = false }`，
+  在 `cargo 1.98.1` 下直接拒绝装载（`default-features` 不允许覆盖 workspace 值）→
+  本地一律按引擎 `rust-toolchain.toml` 的 **1.99.0** 跑
+  `cargo fmt --all --check` / `cargo clippy --workspace --all-targets --offline -- -D warnings` /
+  `cargo test --workspace --release --offline`；CI 用的是 `rust-toolchain@stable`，若 stable 版本不同，
+  rustfmt 细节可能有差，以引擎钉死的版本为准。
+- **2026-10-27 实跑记录**（工具链 **1.99.0**：rustc 1.99.0 / cargo 1.99.0 / rustfmt 1.10.0-stable / clippy 0.1.99）：
+  `cargo +1.99.0 fmt --all --check` 退出 0；`cargo +1.99.0 clippy --workspace --all-targets --offline -- -D warnings`
+  无告警（53 单元）；`cargo +1.99.0 test --workspace --release --offline` 全过（`matsuri-core` 18 例）。
+  同一组命令此前先用「1.99.0 cargo + 1.98.1 rustc / rustfmt / clippy」代跑过一次，结论一致。
+  镜像缺 1.99.0 时的补齐法：`rust-std` / `cargo` / `rustfmt` / `clippy` 走 `rustup toolchain install 1.99.0`，
+  `rustc`（84 MB）单组件用分段 `curl -r` 拉 `dist/2026-10-01/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.xz`
+  后跑包内 `install.sh --prefix=<toolchain 目录> --disable-verify --disable-ldconfig`。
 
 ## 5. 对话核对记录（前期主验证方式）
 
@@ -49,3 +74,4 @@
 | 2026-10-26 | 建仓 / 代号 / master.mdb 表结构 | 用户 + Agent | 代号 `matsuri`、五 crate 建仓、11 张表结构登记 | 机制数值与回合坐标待收口 |
 | 2026-10-26 | `single_mode_15_*` / `training_effect` / `text_data` | 用户 + Agent | 数值与效果编号已解码；回合统一 **0 基**（原始 1 基 -1） | gauge 归属 / 合宿延长 / 友人分身 / 双人头 / 事件回合 |
 | 2026-10-26 | 合宿延长 / 合宿期支援卡事件 | 用户 + Agent | 每年保证 4 个非比赛合宿回合；正常合宿不触发支援卡事件 | 延长段连续事件 / Lv+1 结算点待测 |
+| 2026-10-27 | S2 数据层（11 张表导入 / 校验 / 单测）+ 上游 memo 整理（`f425518`） | 用户 + Agent | 真机 `NeedActGauge = 5`、`MaxActLevel = 10`；turn 一律 0 基；四列全取纪律；撤回 `check_point_effect 4 = スキルPt ÷ 5`（数值巧合，按同号同义读得意率） | `sub_id` 轴 / `gimmick_discount_rate` 单位 / 终局评分是否纳入 AI 目标 |

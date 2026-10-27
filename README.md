@@ -14,11 +14,21 @@
 ## 当前状态
 
 - **S1 建仓完成**：五 crate 改名、依赖路径、引擎静态数据、CI 与文档骨架已落地。
-- **S0 数值解码完成**：`single_mode_15_*` 11 张表、`single_mode_training_effect`（scenario 15）与
-  官方效果文案已对齐，结论在 [`docs/plan/intake.md`](docs/plan/intake.md) / [`docs/mechanism.md`](docs/mechanism.md)；
-  仅剩 gauge 归属、合宿延长细节 / Lv+1 结算点、延长段支援卡事件、友人分身、同名双人头、事件触发回合待真机。
-- **S2 数据层待启动**：解码结果待落成 `scenario_matsuri.json` 与 `data.rs`；资产中的
-  `sample_resource` / `sample_order` 仍为 `STUB`，见 [`docs/plan/stubs.md`](docs/plan/stubs.md)。
+- **S0 数值与口径解码（◐）**：`single_mode_15_*` 11 张表、`single_mode_training_effect`（scenario 15）与
+  官方效果文案已对齐；memo 2026-10-27 的入账规则、事件时间轴、评分与技能价格已分档整理进
+  [`docs/plan/intake.md`](docs/plan/intake.md) §3.9–§3.13 / §7（结论与存疑清单），机制文档见
+  [`docs/mechanism.md`](docs/mechanism.md)。剩余待真机项见 [`docs/plan/scenario_dev_plan.md`](docs/plan/scenario_dev_plan.md) §4。
+- **S2 数据层已落地（2026-10-27，验证全绿）**：`single_mode_15_*` 11 张表与 `single_mode_training_effect`
+  （`sub_id = 1` 档）已导入 `data/scenario_matsuri.json`，`crates/matsuri-core/src/data.rs` 负责
+  schema、跨表引用校验与越界报错；`cargo +1.99.0 fmt --all --check` / `clippy --workspace --all-targets -- -D warnings` /
+  `test --workspace --release --offline` 三条全过；**结算代码一行未写**（等 S0 剩余机制收口）。
+  落库口径（turn 0 基、四列全取、`result_state` 按表定、观测值不入库）见 [`docs/plan/intake.md`](docs/plan/intake.md) §4。
+- 资产中的 `sample_resource` 与配置里的 `sample_order` 仍为 `STUB`，训练表其余档位为 `TBD`，
+  见 [`docs/plan/stubs.md`](docs/plan/stubs.md)。
+- **本地验证一律用引擎钉的 1.99.0**：引擎清单含 `umasim = { workspace = true, default-features = false }`，
+  在 1.98.1 下无法装载（`default-features` 覆盖被判非法）。镜像没装 1.99.0 时先补齐
+  （`rustup toolchain install 1.99.0`；`rustc` 单组件可分段拉 tarball 后跑包内 `install.sh`），
+  步骤见 [`docs/tests_overview.md`](docs/tests_overview.md) §4；下面的命令都带 `+1.99.0`。
 
 ## 结构
 
@@ -56,13 +66,13 @@
 
 ```powershell
 # 数据根是代码级常量 data/（crates/matsuri-cli/src/main.rs 的 DATA_ROOT）
-cargo run --release --bin matsuri --            # 样例训练员
-cargo run --release --bin matsuri -- random     # 引擎随机基线（对照用）
-cargo run --release --bin matsuri -- manual     # 无颜色人工选择（机制核对用）
+cargo +1.99.0 run --release --bin matsuri --            # 样例训练员
+cargo +1.99.0 run --release --bin matsuri -- random     # 引擎随机基线（对照用）
+cargo +1.99.0 run --release --bin matsuri -- manual     # 无颜色人工选择（机制核对用）
 
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo test --workspace --release --offline
+cargo +1.99.0 fmt --all --check
+cargo +1.99.0 clippy --workspace --all-targets --offline -- -D warnings
+cargo +1.99.0 test --workspace --release --offline
 ```
 
 - `cargo check` / `clippy` / `test` 通过（**不改引擎任何一行**）。

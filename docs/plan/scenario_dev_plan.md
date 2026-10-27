@@ -18,7 +18,7 @@
 |---|---|---|
 | S0 机制与用语文档核对 | ◐ | `plan/intake.md` + `mechanism.md` + `glossary.md`；数值 / 窗口 / 效果编号已解码；机制包 v1 + memo（2026-10-27）已整理：発表会永久 buff 表、転成编码、公式、事件时间轴、进化技能、评分三点锚；剩彩圈范围、合宿延长细节 / Lv+1、延长段支援卡事件、友人分身、同名双人头、稽古基础值口径、成功档一次性奖励、公式下段待真机 |
 | S1 建仓与装配 | ☑ | 五 crate 改名、依赖路径、静态数据、CI、文档骨架 |
-| S2 数据层 | ☐ | `core/src/data.rs` / `config.rs`；`training_effect` 与 11 张表已解码，schema / 导入待落 |
+| S2 数据层 | ☑（2026-10-27，验证全绿） | `crates/matsuri-core/src/data.rs` + `data/scenario_matsuri.json`：11 张表 + `training_effect`（`sub_id = 1`）已导入，schema / 跨表校验 / 越界报错 + 11 个内联单测；`config.rs` 未动；训练表其余档位与 `sample_resource` 见 `plan/stubs.md`；**结算代码未写** |
 | S3 局面与阶段机 | ☐ | `core/src/game/{mod,stage}.rs` |
 | S4 动作与结算 | ☐ | `core/src/game/action.rs` |
 | S5 机制 | ☐ | `core/src/game/*`；演目 / gauge / 教え / 合宿 |
@@ -57,6 +57,8 @@
 | 2026-10-27 | 属性基础上限以 2200/1850/1800/1700/1800 为准 | official + memo 一致；机制包 2150 一组为另一层口径 | 有（评分） |
 | 2026-10-27 | memo 公式 / gauge / 事件时间轴 / 进化技能 | memo 2026-10-27 更新；按「中」可信度使用，待真机复核 | 可能位移 |
 | 2026-10-27 | 评分 / 技能价格仅作 AI 评价参考 | 4.682 × revise + PT×2.46、技能价折扣公式三点锚；不参与剧本结算 | 有（训练员 / 工具面） |
+| 2026-10-27 | S2 剧本资产落库口径 | 形状统一为 `effect_type` + `condition_*` + `values[4]`；turn 一律 **0 基**（机制包 / mdb 为 1 基，导入即 −1）；读取**四列全取**（`advice_effect` 里同为 `effect_type = 13`：教诲 101 只填第 4 列，601 填第 2 + 第 4 列）；`result_state` **不建全局字典**，按所在表定档（発表会 0/1/2 = 未达 / 成功 / 大成功，3 → 越界报错；训练表 1/2 = 失败 / 成功）；反序列化 `deny_unknown_fields`，未知字段 / 未知键严格报错；观测值（2.59×、评分系数、报文实测上限）不入数据与配置 | S2 数据口径（`data.rs`） |
+| 2026-10-27 | 本地验证按引擎钉的 **1.99.0** 全套实跑 | 1.98.1 的 cargo 装载不动引擎清单（`default-features` 覆盖被判非法）；补齐 1.99.0 组件后 `fmt` / `clippy -D warnings` / `test --release --offline` 三条全绿 | 无（工具链口径） |
 
 ## 4. 待决事项
 
@@ -79,12 +81,14 @@
 | 15 | 事件触发回合 | memo 给出 0 基 1/2/11/23/35/47/59/67 时间轴；10 月前半待核 | 基本确认 |
 | 16 | 延长合宿的支援卡连续事件 | 固定马娘事件仍发生；支援卡事件抑制；延长段待测 | 机制未确认 |
 | 17 | 合宿 Lv +1 结算点 | 8 月后半合宿结束事件 vs 全部顺延结束 | 机制未确认 |
-| 18 | 机制包数据导入 | 全量 `scenario_matsuri.json` 可用；回合为 1 基；schema 与仓内模板不同，需转换 | S2 前置 |
+| 18 | 机制包数据导入 | ☑ 已导入：机制包全量 JSON 已转成仓内 `data/scenario_matsuri.json`（1 基 → 0 基、四值收 `values[4]`、`stage` / `acts` 展平），schema 与校验在 `crates/matsuri-core/src/data.rs` | ☑ 已收口 |
 | 19 | `effect_type` schema | 已收口：scenario 15 全局同义 | ☑ 已收口 |
 | 20 | 评分 / 技能价格模型 | 公式与三点锚可用；是否纳入训练员目标 / 工具面待定 | 待用户拍板 |
 | 21 | 训练公式下段 | memo 仍 TODO | 训练值 / S5 前置 |
 | 22 | 目标赛事奖励 | memo：五维 +5、SP +72？；参考实现用 +3 / +45 | 数值待确认 |
 | 23 | 吾妻无凸 / R 连续事件 | memo 未给；官方 UI / 真机 | 事件管线 |
+| 24 | `gimmick_discount_rate = 5000` 的单位 | §3.10 技能价公式里按「剧本 −10%」使用；5000 若为 bp 则 50%、若为 ‰ 则 5%，与 10% 对不上；资产暂只存原值不参与结算 | 数值口径 |
+| 25 | 训练表档位完整性 | 普通训练与演目稽古都只导入 `sub_id = 1` 一档；其余档待重提取，且 `sub_id` 与 `command_level`（= 演目 Lv）的对应待真机（intake §5 #21）；引擎按表长截档，缺档不报错但会位移 | S4/S5 前置 |
 
 ## 5. 当前焦点
 
@@ -93,11 +97,21 @@
 - 已完成：**机制包 v1 + memo 整理**——全量 JSON、演目 / 転成原始编码对照、発表会永久 buff 表、
   一次性奖励文案、公式、事件时间轴、进化技能、评分与技能价格三点锚、报文字段位置；
   已确认 / 存疑清单见 [`intake.md`](intake.md) §7。
-- 正在做：**S2 数据层 schema**——把解码结果落成 `scenario_matsuri.json` 与 `data.rs`；同时保留 S0
-  剩余机制（彩圈范围、合宿延长细节 / Lv+1 结算点、延长段支援卡事件、友人分身、同名双人头、
-  稽古基础值口径、成功档一次性奖励、公式下段）为 `TBD`。
-- 下一步：先做 S2 数据 schema 与导入（含机制包 JSON 的 1 基 → 0 基转换；`effect_type` 全局同义），
-  再在正式帧通道到位后收口 S0 剩余项；S3 阶段机随后。
+- 已完成：**S2 数据层**（2026-10-27）——机制包全量 JSON 转成仓内 `data/scenario_matsuri.json`
+  （11 张表 + `training_effect` `sub_id = 1` 档 + `act_gauge_max 5` / `act_level_max 10`），
+  `crates/matsuri-core/src/data.rs` 落 schema、跨表引用校验与越界报错，附 11 个内联单测；
+  落库口径见 [`intake.md`](intake.md) §4 / 本文 §3，未收口项见 [`stubs.md`](stubs.md)。
+- S2 收尾验证（2026-10-27，工具链 **1.99.0**：rustc 1.99.0 / cargo 1.99.0 / rustfmt 1.10.0 / clippy 0.1.99）：
+  `cargo +1.99.0 fmt --all --check` 退出 0；`cargo +1.99.0 clippy --workspace --all-targets --offline -- -D warnings`
+  无告警；`cargo +1.99.0 test --workspace --release --offline` 通过（`matsuri-core` 18 例 = 数据层 11 + 配置 4 +
+  阶段 2 + 训练员 1）；`cargo +1.99.0 run --release --bin matsuri -- manual` 跑通到回合 0 视图。
+  备注：镜像默认只有 1.98.1，且 1.98.1 的 cargo 装载不动引擎清单
+  （`umasim = { workspace = true, default-features = false }` 被判为非法覆盖），需先装 1.99.0
+  （补齐步骤见 [`tests_overview.md`](../tests_overview.md) §4）。
+- 下一步：本轮改动经用户确认后提交；随后 **S3 阶段机**只做已确认坐标
+  （発表会 0 基 23 / 47 / 67、伝受窗口 2 / 11 / 23 / 35 / 47 / 59、合宿 12–15 / 36–39 / 60–63、
+  事件时间轴 intake §3.13），gauge 彩圈范围、合宿延长细节 / Lv+1 结算点、延长段支援卡事件、友人分身、
+  同名双人头、稽古基础值口径、成功档一次性奖励、公式下段等 §4 缺口到位前**不写结算**。
 - 已知风险：协议 / 运行时为「小黑板插件未实装」的只读初析，正式帧到位前不作为验收口径；
   memo 的公式 / 事件 / 进化技能按「中」可信度使用；演目稽古基础值口径仍冲突。
 

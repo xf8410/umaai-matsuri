@@ -11,9 +11,10 @@
 | 项 | 当前占位值 | 来源 | 存放位置 | 替换条件 | 基线影响 | 状态 |
 |---|---|---|---|---|---|---|
 | `sample_resource` | `0` | 模板占位 | `data/scenario_matsuri.json` / `MatsuriData` / `MatsuriView` | 5 条演目 gauge 账本定形（S2/S5） | 会位移 | OPEN |
-| `training_basic_value` | 模板样例 2 档 × 5 训练 | 模板 | `data/scenario_matsuri.json` | 已从 `single_mode_training_effect`（scenario 15，56 行）提取，待 S2 导入 | 会位移 | RESOLVED（数值）/ TBD（导入） |
+| `training_basic_value` | 真数据：5 训练 × **1 档**（`sub_id = 1`，intake §3.2） | data `single_mode_training_effect`（15，56 行） | `data/scenario_matsuri.json` → `MatsuriData` → `game/traits.rs` | 其余档位待重提取（`sub_id` 与 `command_level` 关系见 intake §5 #21）；引擎按表长截档，缺档不报错但会位移 | 会位移 | 单档 DONE / 其余档 TBD |
+| `act_training_basic` | 真数据：`5101`–`5105` × **1 档**，`level` 存 `sub_id` | data `single_mode_training_effect`（15） | `data/scenario_matsuri.json` → `MatsuriData` | 其余档待提取；`level` 与演目 Lv 是否同轴按 intake §5 #21 定案后校正 | 会位移 | 单档 DONE / 其余档 TBD |
 | `sample_order` | `[0, 1, 2, 3, 4]` | 模板 | `data/matsuri_config.toml` / `MatsuriConfig` | 手写训练员偏好表定形（S7） | 会位移 | OPEN |
-| master.mdb `single_mode_15_*` 导入 | 已解码，未导入；机制包 v1 提供全量 `scenario_matsuri.json` | 静态数据 | `docs/plan/intake.md` §3 / §4 | S2 数据层按表 schema 导入 / 转换（注意机制包回合为 1 基） | 会位移 | TBD（导入） |
+| master.mdb `single_mode_15_*` 导入 | ☑ 已导入（2026-10-27）：`acts 5` / `act_effect 66` / `schedule 3` / `advice 10` / `advice_effect 153` / `advice_events 6` / `fusion_effect 9` / `check_point_effect 20` / `finals_act_effect 4` / `outing_effect 10` / `training_basic_value 5×1` / `act_training_basic 5×1` | 静态数据 → `data/scenario_matsuri.json` | `crates/matsuri-core/src/data.rs`（schema + `validate()` + 11 单测） | 无（形状与数值已按 intake §4 落库口径固化；数值变化走再生） | 会位移 | DONE |
 | `scenario_id` | `15` | data `single_mode_scenario` | `data/scenario_matsuri.json` | 已确认 | 无 | DONE |
 | gauge 归属规则 | 未实现 | memo（2026-10-27） | `game/*` | 参与担当每人 +1 / 友情 +2 / 目标比赛 +4 / 休息外出 +1；按 Lv 与 gauge 最低者优先；彩圈范围待真机 | 会位移 | TBD（实现） |
 | 合宿延长规则 | 未实现 | user（2026-10-26） | `game/stage.rs` | 每年保证 4 个非比赛合宿回合；比赛 / 强制休息顺延；具体边界算法待落 | 会位移 | TBD |
@@ -36,6 +37,20 @@
 | 追加稽古 gauge 增量 | +1（最低演目） | memo（2026-10-27） | 剧本资产 | 上 / 下选项完整效果已给出；真机复核 | 会位移 | RESOLVED（数值）/ TBD（实现） |
 | 吾妻无凸 / R 连续事件 | 未知 | memo | 事件管线 | 官方 UI / 真机 | 会位移 | TBD |
 | 通常训练 Lv 上升 | 4 回で上昇？ | memo | 训练结算 | 真机核对 | 会位移 | TBD |
+
+| `gimmick_discount_rate` 单位 | 资产存原值 `5000` | data `single_mode_scenario` row 15 | 剧本资产 | 与 intake §3.10「剧本 −10%」的换算（intake §5 #26）；定案前不参与结算 | 会位移 | TBD |
+
+## 观测值（只记录，不入库）
+
+> 这些是外部测量 / 拟合结果，**不是剧本表里的数**：不进 `data/`、不进配置、不参与结算，
+> 只能在 `intake.md` / `mechanism.md` 作证据留存，或被 AI / 工具面单独引用。
+
+| 观测值 | 出处 | 用途边界 |
+|---|---|---|
+| 合宿产出 ≈ 2.59×（普通回合中位 +56 / 合宿中位 +145，964 份报文） | 机制包报文 | 整体产出比，含休息与稽古；不得当「稽古倍率」写进训练结算 |
+| 终局评分 `4.682 × Σrevise + 技能分`、`技能分 ≈ PT × 2.46…3.2` | 机制包附录 C（intake §3.10） | AI 目标函数 / 复盘工具参考；非回合机制 |
+| 报文实测五维上限 2302/1852/1845/1704/1808、真机 turn 2 样本 2216/1850/1848/1732/1800 | 机制包报文 / frame* | 与基础上限（2200 一组）不同层，只作对照 |
+| 机制包属性上限组 2150/1800/1700/1700/1800（+950/+600/…） | 机制包（Wiki） | 口径分歧，已定以 2200 一组为准，不采用 |
 
 ## 代码标记约定
 

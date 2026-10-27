@@ -357,6 +357,24 @@
 - `data/text_data_dict.json` 已补入本剧本部分中文译文（55 / 63 / 119 / 462 / 463 / 458 / 461 / 466 / 499 等）；
   术语以 [`glossary.md`](../glossary.md) 为准。主剧本事件标题 `400015xxx` 尚未翻译。
 
+**剧本资产落库口径（S2，`data/scenario_matsuri.json` + `crates/matsuri-core/src/data.rs`）**
+
+1. **turn 一律 0 基**：机制包与 `master.mdb` 为 1 基，导入即 −1（`schedule` 24/48/68 → 23/47/67；
+   `advice_recommend` 3/12/24/36/48/60 → 2/11/23/35/47/59）。
+2. **形状统一**：每行收成 `effect = {condition_type?, condition_value?, effect_type, values[4]}`；
+   原表没有 `condition_*` 列的表（`check_point_effect`）缺省为 0 / 无条件。
+3. **四列全取**：`effect_value_1..4` 合并为 `values[4]`，读取时四列都要看——同为 `effect_type = 13`，
+   教诲 `101` 只填第 4 列，`601` 填第 2 + 第 4 列；只取 `v1` 或只取 `v4` 都会漏值。
+4. **`result_state` 不建全局字典**：按所在表定档 —— `check_point_effect` 0/1/2 = 未达 / 成功 / 大成功
+   （3 未观察到，出现即越界报错）；`single_mode_training_effect` 1/2 = 失败 / 成功。
+5. **载入期严格**：`deny_unknown_fields`，未知字段 / 未知配置键直接报错；跨表引用（`advice_id` /
+   `schedule_id` / `command_id`）与档位覆盖（`act_effect` Lv1–10）在 `validate()` 里核，越界不静默取末档。
+6. **只有数据、没有结算**：语义按「所在表 + 编号」定，效果实现等 §5 收口；**观测值不入资产与配置**
+   （合宿 2.59×、评分 4.682 / PT×2.46、报文实测五维上限只记录在 §3.8 / §3.10）。
+7. **已导入 / 未导入**：11 张 `single_mode_15_*` + `training_effect`（`sub_id = 1` 一档，普通训练 5 条 +
+   演目稽古 5 条）已入库；`act_gauge_max = 5` / `act_level_max = 10` 作资产常量入 `MatsuriData`；
+   其余训练档位与 `sample_resource`（STUB）见 [`stubs.md`](stubs.md)。
+
 ## 5. 待确认问题
 
 | # | 问题 | 当前理解 | 备选 | 影响面 | 结论 |
@@ -386,6 +404,7 @@
 | 23 | 目标赛事奖励 | memo：五维 +5、SP +72？；参考实现用 +3 / +45 | 待真机 | 比赛 / 评分 | 待真机 |
 | 24 | Senior 每演目 +1 担当 | memo：Senior 各演目再 +1 人；链接角色按固定演目判定 | — | 人头 / gauge | memo 已答 / 待真机 |
 | 25 | 通常训练 Lv 上升 | memo 调查项：「4 回で上昇」 | 其它 | 训练值 | 待真机 |
+| 26 | `gimmick_discount_rate = 5000` 的单位 | §3.10 技能价按「剧本 −10%」使用 | 5000 = bp（50%）/ ‰（5%）/ 另有换算 | 技能购买结算；资产只存原值 | 待真机 |
 
 ## 6. S0 核对结论
 
@@ -399,6 +418,10 @@
   （`202` 友情 / `4` 得意 / `2` 灵感；`204` 比赛待真机）；一次性奖励（全能力 / PT / 粉丝等）另计。
   属性上限以 2200 一组为准。
 - **结论**：可进入 **S2 数据层**（按本文件 §3 / §4 建 schema 与导入）；机制相关代码等剩余项收口后再落。
+- **S2 已落（2026-10-27）**：按上条结论完成导入 —— `data/scenario_matsuri.json`（11 张表 + `training_effect`
+  单档）+ `crates/matsuri-core/src/data.rs`（schema / 校验 / 11 个内联单测），口径见本文件 §4 落库清单；
+  `cargo +1.99.0 fmt --all --check` / `clippy --workspace --all-targets -- -D warnings` /
+  `test --workspace --release --offline` 全绿。**结算代码一行未写**。
 - 用户确认日期：2026-10-26（建仓与代号）；机制包 v1 / memo 整理日期：2026-10-27。
 
 ## 7. 资料核对结论（2026-10-27）
