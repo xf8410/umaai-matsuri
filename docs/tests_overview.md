@@ -57,8 +57,8 @@
   在 `cargo 1.98.1` 下直接拒绝装载（`default-features` 不允许覆盖 workspace 值）→
   本地一律按引擎 `rust-toolchain.toml` 的 **1.99.0** 跑
   `cargo fmt --all --check` / `cargo clippy --workspace --all-targets --offline -- -D warnings` /
-  `cargo test --workspace --release --offline`；CI 用的是 `rust-toolchain@stable`，若 stable 版本不同，
-  rustfmt 细节可能有差，以引擎钉死的版本为准。
+  `cargo test --workspace --release --offline`；CI 也钉同一版本（`dtolnay/rust-toolchain@1.99.0`，见 §6），
+  避免 stable 漂移导致 rustfmt 细节不一致。
 - **2026-10-27 实跑记录**（工具链 **1.99.0**：rustc 1.99.0 / cargo 1.99.0 / rustfmt 1.10.0-stable / clippy 0.1.99）：
   `cargo +1.99.0 fmt --all --check` 退出 0；`cargo +1.99.0 clippy --workspace --all-targets --offline -- -D warnings`
   无告警（53 单元）；`cargo +1.99.0 test --workspace --release --offline` 全过（`matsuri-core` 18 例）。
@@ -75,3 +75,20 @@
 | 2026-10-26 | `single_mode_15_*` / `training_effect` / `text_data` | 用户 + Agent | 数值与效果编号已解码；回合统一 **0 基**（原始 1 基 -1） | gauge 归属 / 合宿延长 / 友人分身 / 双人头 / 事件回合 |
 | 2026-10-26 | 合宿延长 / 合宿期支援卡事件 | 用户 + Agent | 每年保证 4 个非比赛合宿回合；正常合宿不触发支援卡事件 | 延长段连续事件 / Lv+1 结算点待测 |
 | 2026-10-27 | S2 数据层（11 张表导入 / 校验 / 单测）+ 上游 memo 整理（`f425518`） | 用户 + Agent | 真机 `NeedActGauge = 5`、`MaxActLevel = 10`；turn 一律 0 基；四列全取纪律；撤回 `check_point_effect 4 = スキルPt ÷ 5`（数值巧合，按同号同义读得意率） | `sub_id` 轴 / `gimmick_discount_rate` 单位 / 终局评分是否纳入 AI 目标 |
+
+## 6. CI（`.github/workflows/ci.yml`）
+
+本地三条门依赖一个隐含前提：**引擎仓与本仓并列**（`../umaai_next`）。CI 上原先不成立，2026-10-27 记录如下。
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| `Checkout engine repo` 报 `Input required and not supplied: token` | 仓库名取的是 `github.repository_owner`（本账号）下的 `umaai-next`，该仓不存在，且 `ENGINE_REPO_TOKEN` 未配；`continue-on-error: true` 把失败吞掉 | 改指公开上游 `umaai-project/umaai-next`，token 用 `secrets.ENGINE_REPO_TOKEN \|\| github.token`，**去掉 `continue-on-error`**（缺引擎就该红） |
+| `cargo fmt` 挂在 `cargo metadata`：`failed to read .../umaai-matsuri/umaai_next/...`（少一层） | path 依赖指向工作区的**并列目录**，而 `actions/checkout` 只能检进工作区内（`path: umaai_next` 落在仓内） | 检出后 `ln -s "$GITHUB_WORKSPACE/umaai_next" "$GITHUB_WORKSPACE/../umaai_next"` |
+| 就算引擎到位也会解析失败 | `rust-toolchain@stable`（= cargo 1.98.1）拒绝装载引擎清单：`umasim = { workspace = true, default-features = false }` 不允许覆盖 workspace 值 | 钉 `dtolnay/rust-toolchain@1.99.0`（与引擎 `rust-toolchain.toml` 一致） |
+| clippy / test 覆盖面与本地门不一致 | CI 只写 `--all-targets` / 无 `--workspace` | 补 `--workspace`，与 §4 三条命令逐字对齐（仅省 `--offline`，CI 需要联网取索引） |
+
+- 该「并列 + 软链接」布局在本地用一份干净拷贝实测过：`cargo +1.99.0 metadata` 能解析到引擎清单、
+  `cargo +1.99.0 fmt --all --check` 退出 0。
+- 引擎侧不改动：CI 只把 `umaai-next` 当 path 依赖编译，不提交、不补丁。
+- **2026-10-27 修好并实跑**：run #3（commit `1928fb8`）8 步全成功，`fmt` / `clippy` / `test` 通过，
+  `matsuri-core` 18 例（与 §4 本地记录同数）。此前 run #1 / #2 因上述检出问题红。
