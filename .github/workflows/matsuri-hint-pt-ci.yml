@@ -1,0 +1,595 @@
+# Fork-only bootstrap. The candidate branch starts from upstream and excludes this file.
+name: Matsuri Hint PT validation
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/matsuri-hint-pt-ci.yml']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: matsuri-hint-pt-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    if: github.repository == 'xf8410/umaai-matsuri' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      FORK_BASE_SHA: a639a3c6f64e35e1dbdea490380c4a92839f755b
+      UPSTREAM_SHA: 86bd9468d408b4a2631dad93b8b5a2a8ce8785b6
+      CANDIDATE_REF: refs/heads/hint-pt-model
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Apply the candidate to the verified upstream base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD^)" != "$FORK_BASE_SHA" ||
+                "$(git diff --name-status "$FORK_BASE_SHA" HEAD)" != $'A\t.github/workflows/matsuri-hint-pt-ci.yml' ]]; then
+            echo '::error::Expected a single bootstrap commit on the pinned upstream base.'
+            exit 1
+          fi
+          git fetch --no-tags https://github.com/umaai-project/umaai-matsuri.git "$UPSTREAM_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$UPSTREAM_SHA"
+          git switch --detach "$UPSTREAM_SHA"
+          git apply --index <<'HINT_PT_PATCH'
+          diff --git a/benchmark/_local/hint_pt/README.md b/benchmark/_local/hint_pt/README.md
+          new file mode 100644
+          --- /dev/null
+          +++ b/benchmark/_local/hint_pt/README.md
+          @@ -0,0 +1,55 @@
+          +# 灵感等级与 PT 估分对照
+          +
+          +基于 `umaai-matsuri@a639a3c6`、`umaai-next@ae3cab19`。本实验不改模拟器、线上决策或默认系数。候选换分函数仅接收累计灵感等级 `H` 与未花费 PT `P`；不追踪技能，不给训练灵感计入金技或进化技能收益。
+          +
+          +## 现状与候选
+          +
+          +- 现版（无切者）：`trunc(floor(P + 6.5H) × 1.88)`，保留 Rust `f32` 与取整顺序。模拟初始 `H=21`。搜索的 `pt_favor_rate` 是策略权重，不参与此次评分校准。有既得技能分时，另计既得分，不能把含 `skillPtSpent` 回加的 `Uma.skill_pt` 当作 `P`。
+          +- `rateH`：`r₀ P [1 + aH/(H+h₀)]`。累计灵感提高平均分/PT，但同一 H 的每级灵感收益与 P 成正比。
+          +- `scoreHP`：`r₀ [P + (kH)(λP)/(kH+λP)]`。`kH` 是可产生优惠的规模，`λP` 限制预算可兑现的优惠；任一为零则优惠为零。新增灵感折分用 `scoreHP(H+ΔH,P) − scoreHP(H,P)`，不是把总折扣重复计入。`scoreHP/P` 是平均分/PT；多给 1 PT 的分差是边际价值，两者不相等。
+          +- `7.5%` 是无加成的灵感基础概率，只在生成基线机会时抽样。条件已触发的 Hint 和累计 H 不再乘 `7.5%`；本实验不拟合触发机制。
+          +
+          +## 复跑
+          +
+          +CI 使用 Node.js 24 和生成的合成夹具，覆盖公式边界、CSV 三种子留出、配对标签导入和参数恢复，无需下载数据。复跑下方真实白技价格实验时，另提供本地 SO 导出。
+          +
+          +```sh
+          +node --test scripts/hint_pt_model.test.cjs
+          +node scripts/hint_pt_model.cjs --test
+          +node scripts/hint_pt_model.cjs --csv /path/to/skill-grade-pt-so-3.29.8.csv
+          +node scripts/hint_pt_model.cjs --csv /path/to/skill-grade-pt-so-3.29.8.csv 20261121
+          +node scripts/hint_pt_model.cjs --csv /path/to/skill-grade-pt-so-3.29.8.csv 20261122
+          +node scripts/hint_pt_model.cjs --labels /path/to/paired-labels.json
+          +```
+          +
+          +CSV 列为 `skill_id,skill_name,rarity,group_id,group_rate,base_grade,base_pt`。使用已核验的 SO 3.29.8 导出，SHA-256 `a9617ea4ec8ac11de284b8ec7d2e8bf1a75671bfa9fe0b3cff84e9597cc5ca94`，不入仓。选取 455 项有正价格和基础分的白技（每组只取 `group_rate=1`），价格逐项向下取整，Hint Lv0–5 折扣为 `0/10/20/30/35/40%`。只评价基础分，不混入适性加权、切者、金技、升级或已买技能。
+          +
+          +每个种子抽出六个互不重叠的白技池，各 64–84 项。每池 12 个模拟折扣状态，每状态测四种预算，共 288 对照行。七项初始 Lv3；60% 技能进入抽签池，其余机会数、目标、等级与预算也都是实验设定，不是真机频数。离线参照用 0/1 背包求给定预算内的最高白技分；新增 Hint 等级（+1/+3/+5）独立于基线折扣抽样，取同一状态下三个目标的平均分差，另测 `+8/16/32 PT`。这一步只生成标签，候选计算不读取技能池。每次整个白技池做留出，拟合只用其余五池；总分、Hint 分差与 PT 分差的平方误差分别用训练集均方尺度归一化。
+          +
+          +## 留出结果
+          +
+          +默认种子 `20261120`，`H=21–448`，`P=3205–10113`。各项单位均为评价分。
+          +
+          +| 模型 | 总分 MAE | 新增 Hint 分差 MAE | 新增 PT 分差 MAE | 选错平均损失 |
+          +| --- | ---: | ---: | ---: | ---: |
+          +| 现版 `1.88 × (P+6.5H)` | 3346.656 | 19.384 | 20.319 | 2.750 |
+          +| 固定 `1.88P` | 1480.844 | 26.167 | 20.341 | 11.869 |
+          +| 拟合固定费率 | 1494.289 | 26.167 | 15.024 | 11.869 |
+          +| `rateH` | 1597.371 | 14.675 | 15.343 | 2.524 |
+          +| `scoreHP` | **868.786** | **12.988** | **14.971** | **2.091** |
+          +
+          +| 种子 | Hint 分差 MAE：现版 → `scoreHP` | 选错平均损失：现版 → `scoreHP` | `scoreHP` 赢过现版的池数（损失） |
+          +| --- | ---: | ---: | ---: |
+          +| `20261120` | 19.384 → 12.988 | 2.750 → 2.091 | 3 / 6 |
+          +| `20261121` | 22.546 → 15.012 | 6.480 → 2.813 | 6 / 6 |
+          +| `20261122` | 21.932 → 12.654 | 4.500 → 2.773 | 5 / 6 |
+          +
+          +「选错平均损失」是已发生的额外 Hint 与额外 PT 二选一时，参照最优分减候选选中项的参照分；不是整局搜索收益。三种子用同一份技能表，重复抽样不是独立真机局。`scoreHP` 的 Hint 分差误差在三次实验的每个留出池都低于现版，但选错损失并非每池都改善。
+          +
+          +主种子全样本拟合 `r₀=1.3141941891, k=12, λ=2/3`，`λ` 达到预设搜索上界，另两次对应 `λ=0.5`。在 `H=383,P=9037`，主种子模型预测 `15302.64` 分，平均 `1.6933 分/PT`，边际 `+1 PT → +1.4783 分`，`+3 Hint Lv → +15.17 分`（约等于该局面增加 `10.26 PT` 的分值）。换种子后平均费率为 `1.6630–1.6933 分/PT`、`+3 Hint Lv` 为 `11.70–15.17 分`。这些是实验模型输出，不是真机终局系数。
+          +
+          +## 真机标签与采用门槛
+          +
+          +`--labels` 读去标识的 JSON 数组，每行 `{run, deck, h, p, nextH, ptDelta, score, hitScore, ptScore}`。`run` 唯一，至少三个 `deck`；`score` 为同一技能池、五维、适性、已学技能和切者状态下可用 `p` 换来的额外白技分，`hitScore` 只改变 Hint，`ptScore` 只增加 `ptDelta`。先使用无切者组；单份购买前 `finalScore` 不是结算标签。普通 Hint 不增加金技获取。实验里的样本池、预算、平均提升与实际对局分布不同，不能据此改默认值。
+          +
+          +进入决策比较时，固定基策、搜索预算及 `pt_favor_rate`，同一批终局样本分别重算、成对用同种子比较；对每个 rollout 单独计算非线性终局分再取均值。用独立评分标签对比动作损失与终局收益，至少主卡组和留出卡组同向，成对 95% CI 不跨零再考虑换默认。
+          diff --git a/scripts/hint_pt_model.cjs b/scripts/hint_pt_model.cjs
+          new file mode 100644
+          --- /dev/null
+          +++ b/scripts/hint_pt_model.cjs
+          @@ -0,0 +1,295 @@
+          +#!/usr/bin/env node
+          +'use strict';
+          +
+          +const assert = require('node:assert/strict');
+          +const fs = require('node:fs');
+          +
+          +const HINT_DISCOUNT = [0, 10, 20, 30, 35, 40];
+          +const BASE_HINT_PROBABILITY = 0.075;
+          +const SEED = 20261120;
+          +const CSV_HEADER = 'skill_id,skill_name,rarity,group_id,group_rate,base_grade,base_pt';
+          +
+          +function price(basePt, level) {
+          +  return Math.floor(basePt * (100 - HINT_DISCOUNT[level]) / 100);
+          +}
+          +
+          +// Match the current f32 arithmetic and rounding, in the no-cut cohort.
+          +function legacy(h, p) {
+          +  const f = Math.fround;
+          +  return Math.trunc(f(Math.floor(f(f(p) + f(f(h) * 6.5))) * f(1.88)));
+          +}
+          +
+          +function rateH(h, p, { r0, a, h0 }) {
+          +  return r0 * p * (1 + a * h / (h + h0));
+          +}
+          +
+          +function scoreHP(h, p, { r0, k, lambda }) {
+          +  if (h === 0 || p === 0) return r0 * p;
+          +  const x = k * h;
+          +  const y = lambda * p;
+          +  return r0 * (p + x * y / (x + y));
+          +}
+          +
+          +function readWhiteCatalog(csv) {
+          +  const [header, ...lines] = csv.trimEnd().split(/\r?\n/);
+          +  assert.equal(header.replace(/^\uFEFF/, ''), CSV_HEADER, 'unexpected SO export header');
+          +  const groups = new Set();
+          +  const skills = [];
+          +  for (const [i, line] of lines.entries()) {
+          +    const match = /^(\d+),"(?:[^"\r\n]|"")*",(\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d*)$/.exec(line);
+          +    assert(match, `bad SO export row ${i + 2}`);
+          +    const [, rarity, group, rate, grade, pt] = match.slice(1).map(Number);
+          +    if (rarity !== 1 || rate !== 1 || group <= 0 || pt <= 0 || grade <= 0) continue;
+          +    assert(!groups.has(group), `duplicate base white skill in group ${group}`);
+          +    assert(price(pt, 5) > 0, `unexpected zero-cost skill in group ${group}`);
+          +    groups.add(group);
+          +    skills.push({ grade, pt });
+          +  }
+          +  return skills;
+          +}
+          +
+          +function rng(seed) {
+          +  let state = seed >>> 0;
+          +  return () => {
+          +    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+          +    return state / 0x100000000;
+          +  };
+          +}
+          +
+          +// Offline reference labels: independent base white skills, each purchasable once.
+          +function scoreCurve(basket, levels, limit) {
+          +  const best = new Int32Array(limit + 1);
+          +  for (const [i, { grade, pt }] of basket.entries()) {
+          +    const cost = price(pt, levels[i]);
+          +    for (let budget = limit; budget >= cost; budget--) {
+          +      best[budget] = Math.max(best[budget], best[budget - cost] + grade);
+          +    }
+          +  }
+          +  return best;
+          +}
+          +
+          +function simulate(catalog, seed) {
+          +  const random = rng(seed);
+          +  const int = n => Math.floor(random() * n);
+          +  const sizes = [64, 68, 72, 76, 80, 84];
+          +  const shuffled = catalog.slice();
+          +  assert(shuffled.length >= sizes.reduce((a, b) => a + b), 'need at least 444 base white skills');
+          +  for (let i = shuffled.length - 1; i > 0; i--) {
+          +    const j = int(i + 1);
+          +    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+          +  }
+          +  const rows = [];
+          +  let offset = 0;
+          +  for (const [d, size] of sizes.entries()) {
+          +    const basket = shuffled.slice(offset, offset + size);
+          +    offset += size;
+          +    const eligible = Math.floor(size * 0.6);
+          +    const fullPrice = basket.reduce((sum, skill) => sum + skill.pt, 0);
+          +    const opportunities = [0, 160, 400, 760, 1160, 1600];
+          +    for (let r = 0; r < opportunities.length * 2; r++) {
+          +      const levels = new Uint8Array(size);
+          +      levels.fill(3, 0, 7);
+          +      let h = 21;
+          +      for (let i = 0; i < opportunities[r % opportunities.length]; i++) {
+          +        if (random() >= BASE_HINT_PROBABILITY) continue;
+          +        const target = int(eligible);
+          +        const gain = [1, 3, 5][int(3)];
+          +        // Nominal aggregate H can grow even when the selected skill cannot discount further.
+          +        h += gain;
+          +        levels[target] = Math.min(5, levels[target] + gain);
+          +      }
+          +      const budgets = [0.32, 0.49, 0.63, 0.75].map(fraction => Math.floor(fullPrice * fraction) + int(41) - 20);
+          +      const ptDelta = [8, 16, 32][int(3)];
+          +      const limit = Math.max(...budgets) + ptDelta;
+          +      const before = scoreCurve(basket, levels, limit);
+          +      const hintDelta = [1, 3, 5][int(3)];
+          +      const targets = new Set();
+          +      while (targets.size < 3) targets.add(int(eligible));
+          +      const after = budgets.map(() => 0);
+          +      for (const target of targets) {
+          +        const old = levels[target];
+          +        levels[target] = Math.min(5, old + hintDelta);
+          +        const next = levels[target] === old ? before : scoreCurve(basket, levels, limit);
+          +        for (const [i, p] of budgets.entries()) after[i] += next[p];
+          +        levels[target] = old;
+          +      }
+          +      for (const [i, p] of budgets.entries()) {
+          +        rows.push({
+          +          deck: `basket-${d}`, run: `${d}/${r}/${i}`, h, p,
+          +          nextH: h + hintDelta, ptDelta, score: before[p],
+          +          hitScore: after[i] / targets.size, ptScore: before[p + ptDelta],
+          +        });
+          +      }
+          +    }
+          +  }
+          +  return rows;
+          +}
+          +
+          +function validate(rows) {
+          +  assert(Array.isArray(rows), 'expected a JSON array of labels');
+          +  const runs = new Set();
+          +  const decks = new Set();
+          +  for (const row of rows) {
+          +    const { run, deck, h, p, nextH, ptDelta, score, hitScore, ptScore } = row;
+          +    assert(typeof run === 'string' && run && !runs.has(run), 'labels need unique run IDs');
+          +    assert(typeof deck === 'string' && deck, 'labels need a deck ID');
+          +    assert([h, p, nextH, ptDelta].every(n => Number.isSafeInteger(n) && n >= 0), `invalid H or PT: ${run}`);
+          +    assert(nextH >= h && ptDelta > 0 && Number.isSafeInteger(p + ptDelta), `invalid paired delta: ${run}`);
+          +    assert([score, hitScore, ptScore].every(n => Number.isFinite(n) && n >= 0), `invalid score: ${run}`);
+          +    assert(hitScore >= score && ptScore >= score, `paired scores cannot decrease: ${run}`);
+          +    if (p === 0) assert(score === 0 && hitScore === 0, `zero PT cannot buy skills: ${run}`);
+          +    if (nextH === h) assert(hitScore === score, `no Hint change requires no score change: ${run}`);
+          +    runs.add(run);
+          +    decks.add(deck);
+          +  }
+          +  assert(decks.size >= 3, 'need at least three decks or disjoint baskets');
+          +  return [...decks];
+          +}
+          +
+          +function values(score, row) {
+          +  const base = score(row.h, row.p);
+          +  return [base, score(row.nextH, row.p) - base, score(row.h, row.p + row.ptDelta) - base];
+          +}
+          +
+          +function observed(row) {
+          +  return [row.score, row.hitScore - row.score, row.ptScore - row.score];
+          +}
+          +
+          +function fit(train) {
+          +  // Normalize on training rows so the total score does not drown out the two margins.
+          +  const targets = train.map(observed);
+          +  const weights = [0, 1, 2].map(i => 1 / Math.max(1, targets.reduce((s, y) => s + y[i] ** 2, 0) / targets.length));
+          +  function choose(formula, grid) {
+          +    let best;
+          +    for (const shape of grid) {
+          +      const unit = (h, p) => formula(h, p, { ...shape, r0: 1 });
+          +      let xx = 0;
+          +      let xy = 0;
+          +      let yy = 0;
+          +      for (const [j, row] of train.entries()) {
+          +        values(unit, row).forEach((x, i) => {
+          +          const y = targets[j][i];
+          +          xx += weights[i] * x * x;
+          +          xy += weights[i] * x * y;
+          +          yy += weights[i] * y * y;
+          +        });
+          +      }
+          +      const r0 = xx > 0 ? Math.max(0, xy / xx) : 0;
+          +      const params = { r0, ...shape };
+          +      const loss = yy - 2 * r0 * xy + r0 * r0 * xx;
+          +      if (!best || loss < best.loss) best = { params, score: (h, p) => formula(h, p, params), loss };
+          +    }
+          +    return best;
+          +  }
+          +  const bounds = [0.1, 0.2, 0.35, 0.5, 2 / 3];
+          +  return {
+          +    legacy: { score: legacy },
+          +    fixed188: { score: (_h, p) => 1.88 * p },
+          +    ptOnly: choose((_h, p, { r0 }) => r0 * p, [{}]),
+          +    rateH: choose(rateH, bounds.flatMap(a => [15, 40, 80, 160, 320].map(h0 => ({ a, h0 })))),
+          +    scoreHP: choose(scoreHP, bounds.flatMap(lambda => [0.75, 1.5, 3, 4.5, 6.5, 9, 12, 16].map(k => ({ k, lambda })))),
+          +  };
+          +}
+          +
+          +function evaluate(rows) {
+          +  const decks = validate(rows);
+          +  const folds = [];
+          +  const totals = {};
+          +  for (const deck of decks) {
+          +    const train = rows.filter(row => row.deck !== deck);
+          +    const test = rows.filter(row => row.deck === deck);
+          +    const metrics = {};
+          +    for (const [name, { score, params }] of Object.entries(fit(train))) {
+          +      const sums = { scoreMAE: 0, hintMAE: 0, ptMAE: 0, regret: 0 };
+          +      const total = totals[name] ??= { ...sums };
+          +      for (const row of test) {
+          +        const [base, hint, pt] = values(score, row);
+          +        const [baseTrue, hintTrue, ptTrue] = observed(row);
+          +        sums.scoreMAE += Math.abs(base - baseTrue);
+          +        sums.hintMAE += Math.abs(hint - hintTrue);
+          +        sums.ptMAE += Math.abs(pt - ptTrue);
+          +        sums.regret += Math.max(hintTrue, ptTrue) - (hint > pt ? hintTrue : ptTrue);
+          +      }
+          +      for (const key of Object.keys(sums)) total[key] += sums[key];
+          +      metrics[name] = { ...mean(sums, test.length), params };
+          +    }
+          +    folds.push({ deck, rows: test.length, metrics });
+          +  }
+          +  const allSampleFit = Object.fromEntries(Object.entries(fit(rows)).filter(([, model]) => model.params).map(([name, model]) => [name, model.params]));
+          +  return {
+          +    rows: rows.length, decks: decks.length,
+          +    hRange: range(rows.map(row => row.h)), pRange: range(rows.map(row => row.p)),
+          +    holdout: Object.fromEntries(Object.entries(totals).map(([name, sums]) => [name, mean(sums, rows.length)])),
+          +    folds, allSampleFit,
+          +  };
+          +}
+          +
+          +function range(ns) {
+          +  return ns.reduce(([lo, hi], n) => [Math.min(lo, n), Math.max(hi, n)], [Infinity, -Infinity]);
+          +}
+          +
+          +function mean(sums, count) {
+          +  return Object.fromEntries(Object.entries(sums).map(([key, sum]) => [key, Number((sum / count).toFixed(3))]));
+          +}
+          +
+          +function test() {
+          +  assert.equal(legacy(383, 9037), 21668);
+          +  assert.equal(legacy(383, 0), 4679);
+          +  assert.deepEqual(HINT_DISCOUNT.map((_, h) => price(113, h)), [113, 101, 90, 79, 73, 67]);
+          +  const csv = `${CSV_HEADER}\n1,"a, ""b""",1,10,1,217,200\n2,"gold",2,10,1,508,200\n3,"upgrade",1,10,2,288,180\n4,"missing",1,-1,1,217,`;
+          +  const catalog = readWhiteCatalog(csv);
+          +  assert.deepEqual(catalog, [{ grade: 217, pt: 200 }]);
+          +  assert.equal(scoreCurve(catalog, [5], 240)[240], 217);
+          +  const basket = [...catalog, { grade: 263, pt: 200 }];
+          +  assert.equal(scoreCurve(basket, [3, 3], 285)[285], 480);
+          +  assert.equal(scoreCurve(basket, [5, 1], 285)[285], 263);
+          +  assert.equal(scoreCurve(basket, [5, 1], 300)[300], 480);
+          +  const r0 = 1.4;
+          +  for (const score of [(h, p) => rateH(h, p, { r0, a: 0.35, h0: 80 }), (h, p) => scoreHP(h, p, { r0, k: 6.5, lambda: 0.4 })]) {
+          +    const tol = 1e-9;
+          +    for (const p of [0, 100, 1000, 9037, 13000]) {
+          +      assert.equal(score(0, p), r0 * p);
+          +      for (let h = 0; h < 500; h++) {
+          +        const base = score(h, p);
+          +        if (p === 0) assert.equal(base, 0);
+          +        assert(score(h, p + 1) >= base);
+          +        assert(score(h + 1, p) >= base);
+          +        assert(score(h + 2, p) - score(h + 1, p) <= score(h + 1, p) - base + tol);
+          +        assert(base <= r0 * p * (1 + 0.4) + tol);
+          +      }
+          +    }
+          +  }
+          +  const rows = Array.from({ length: 3 }, (_, i) => ({
+          +    run: `r${i}`, deck: `d${i}`, h: 21, p: 100 + i, nextH: 24, ptDelta: 10,
+          +    score: 2 * (100 + i), hitScore: 2 * (100 + i), ptScore: 2 * (110 + i),
+          +  }));
+          +  assert.equal(evaluate(rows).holdout.ptOnly.scoreMAE, 0);
+          +  assert.equal(evaluate(rows).holdout.ptOnly.ptMAE, 0);
+          +  assert.throws(() => evaluate([rows[0], rows[0], rows[1], rows[2]]), /unique run/);
+          +}
+          +
+          +if (require.main === module) {
+          +  const [mode, path, seedArg, ...extra] = process.argv.slice(2);
+          +  const usage = 'Usage: node scripts/hint_pt_model.cjs --test | --csv SO-export.csv [seed] | --labels paired-labels.json';
+          +  assert(!extra.length, usage);
+          +  if (mode === '--test' && path === undefined) {
+          +    test();
+          +    console.log('OK: prices, legacy rounding, budget labels, model bounds and deck holdout');
+          +  } else if (mode === '--csv' && path) {
+          +    const seed = seedArg === undefined ? SEED : Number(seedArg);
+          +    assert((seedArg === undefined || /^\d+$/.test(seedArg)) && Number.isInteger(seed) && seed >= 0 && seed <= 0xffffffff, 'seed must be a uint32');
+          +    const catalog = readWhiteCatalog(fs.readFileSync(path, 'utf8'));
+          +    console.log(JSON.stringify({
+          +      source: 'SO base price/grade; synthetic availability, H and PT', seed,
+          +      baseHintProbability: BASE_HINT_PROBABILITY, catalogSkills: catalog.length,
+          +      ...evaluate(simulate(catalog, seed)),
+          +    }, null, 2));
+          +  } else if (mode === '--labels' && path && seedArg === undefined) {
+          +    console.log(JSON.stringify(evaluate(JSON.parse(fs.readFileSync(path, 'utf8'))), null, 2));
+          +  } else {
+          +    console.error(usage);
+          +    process.exitCode = mode === '--help' && !path ? 0 : 2;
+          +  }
+          +}
+          +
+          +module.exports = { legacy, rateH, scoreHP };
+          diff --git a/scripts/hint_pt_model.test.cjs b/scripts/hint_pt_model.test.cjs
+          new file mode 100644
+          --- /dev/null
+          +++ b/scripts/hint_pt_model.test.cjs
+          @@ -0,0 +1,158 @@
+          +'use strict';
+          +
+          +const assert = require('node:assert/strict');
+          +const { spawnSync } = require('node:child_process');
+          +const fs = require('node:fs');
+          +const os = require('node:os');
+          +const path = require('node:path');
+          +const { test } = require('node:test');
+          +
+          +const cli = path.join(__dirname, 'hint_pt_model.cjs');
+          +const header = 'skill_id,skill_name,rarity,group_id,group_rate,base_grade,base_pt';
+          +const models = ['legacy', 'fixed188', 'ptOnly', 'rateH', 'scoreHP'];
+          +
+          +function run(...args) {
+          +  const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', timeout: 20_000 });
+          +  assert.ifError(result.error);
+          +  return result;
+          +}
+          +
+          +function report(...args) {
+          +  const result = run(...args);
+          +  assert.equal(result.status, 0, result.stderr);
+          +  return JSON.parse(result.stdout);
+          +}
+          +
+          +function fixture(t, name, contents) {
+          +  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hint-pt-test-'));
+          +  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+          +  const file = path.join(dir, name);
+          +  fs.writeFileSync(file, contents);
+          +  return file;
+          +}
+          +
+          +function syntheticCsv() {
+          +  const white = Array.from({ length: 444 }, (_, i) => {
+          +    const grade = 110 + (i * 37 % 211);
+          +    const pt = 109 + (i * 53 % 119);
+          +    return `${i + 1},"white, ""${i + 1}""",1,${i + 1},1,${grade},${pt}`;
+          +  });
+          +  return `\uFEFF${[header, ...white, '445,"gold",2,1,1,508,200', '446,"upgrade",1,1,2,300,180', '447,"missing cost",1,-1,1,200,'].join('\r\n')}\r\n`;
+          +}
+          +
+          +function checkMetrics(metrics, count) {
+          +  assert.deepEqual(Object.keys(metrics), models);
+          +  for (const model of models) {
+          +    const { scoreMAE, hintMAE, ptMAE, regret } = metrics[model];
+          +    assert([scoreMAE, hintMAE, ptMAE, regret].every(x => Number.isFinite(x) && x >= 0), model);
+          +  }
+          +  assert.equal(count > 0, true);
+          +}
+          +
+          +test('unit tests cover prices, f32 baseline, budget frontiers and model bounds', () => {
+          +  const result = run('--test');
+          +  assert.equal(result.status, 0, result.stderr);
+          +  assert.match(result.stdout, /^OK:/);
+          +});
+          +
+          +test('CSV mode is deterministic and evaluates each entire pool on three seeds', t => {
+          +  const csv = fixture(t, 'synthetic.csv', syntheticCsv());
+          +  const reference = report('--csv', csv);
+          +  assert.deepEqual(reference, report('--csv', csv, '20261120'));
+          +  for (const [seed, result] of [
+          +    [20261120, reference],
+          +    [20261121, report('--csv', csv, '20261121')],
+          +    [20261122, report('--csv', csv, '20261122')],
+          +  ]) {
+          +    assert.equal(result.seed, seed);
+          +    assert.equal(result.baseHintProbability, 0.075);
+          +    assert.equal(result.catalogSkills, 444);
+          +    assert.equal(result.hRange[0], 21);
+          +    assert(result.hRange[1] > 21);
+          +    assert.equal(result.rows, 288);
+          +    assert.equal(result.decks, 6);
+          +    assert.deepEqual(result.folds.map(fold => [fold.deck, fold.rows]),
+          +      Array.from({ length: 6 }, (_, i) => [`basket-${i}`, 48]));
+          +    checkMetrics(result.holdout, result.rows);
+          +    for (const fold of result.folds) checkMetrics(fold.metrics, fold.rows);
+          +  }
+          +  for (const seed of ['-1', '4294967296', '1.5']) {
+          +    const failed = run('--csv', csv, seed);
+          +    assert.notEqual(failed.status, 0);
+          +    assert.match(failed.stderr, /seed must be a uint32/);
+          +  }
+          +  const malformed = fixture(t, 'malformed.csv', `${header}\nnot a skill\n`);
+          +  const failed = run('--csv', malformed);
+          +  assert.notEqual(failed.status, 0);
+          +  assert.match(failed.stderr, /bad SO export row 2/);
+          +});
+          +
+          +function labels() {
+          +  return ['a', 'b', 'c'].flatMap((deck, i) => [100, 150].map((p, j) => ({
+          +    run: `${deck}-${j}`, deck, h: 21 + 37 * i, p, nextH: 24 + 37 * i, ptDelta: 10,
+          +    score: 2 * p, hitScore: 2 * p, ptScore: 2 * (p + 10),
+          +  })));
+          +}
+          +
+          +test('paired labels hold out every row in the evaluation deck', t => {
+          +  const rows = labels();
+          +  const original = report('--labels', fixture(t, 'labels.json', JSON.stringify(rows)));
+          +  assert.equal(original.rows, 6);
+          +  assert.equal(original.decks, 3);
+          +  assert.deepEqual(original.holdout.ptOnly, { scoreMAE: 0, hintMAE: 0, ptMAE: 0, regret: 0 });
+          +
+          +  const changed = rows.map(row => row.deck === 'a' ? {
+          +    ...row, score: row.score + 100, hitScore: row.hitScore + 125, ptScore: row.ptScore + 100,
+          +  } : row);
+          +  const outlier = report('--labels', fixture(t, 'outlier.json', JSON.stringify(changed)));
+          +  const [before] = original.folds;
+          +  const [after] = outlier.folds;
+          +  assert.equal(after.deck, 'a');
+          +  for (const model of ['ptOnly', 'rateH', 'scoreHP']) {
+          +    assert.deepEqual(after.metrics[model].params, before.metrics[model].params);
+          +  }
+          +  assert.equal(after.metrics.ptOnly.scoreMAE, 100);
+          +  assert.equal(after.metrics.ptOnly.hintMAE, 25);
+          +  assert.equal(after.metrics.ptOnly.regret, 5);
+          +  assert.notDeepEqual(outlier.allSampleFit.ptOnly, original.allSampleFit.ptOnly);
+          +});
+          +
+          +test('the fitted H/P formula recovers known parameters on held-out labels', t => {
+          +  const known = (h, p) => 1.35 * (p + 4.5 * h * 0.35 * p / (4.5 * h + 0.35 * p));
+          +  const rows = Array.from({ length: 4 }, (_, deck) =>
+          +    [900, 2400, 6100, 9200].map((p, i) => {
+          +      const h = [21, 72, 163, 310][(deck + i) % 4] + deck;
+          +      const nextH = h + [1, 3, 5, 3][i];
+          +      const ptDelta = [8, 16, 32, 16][i];
+          +      return {
+          +        run: `${deck}/${i}`, deck: `known-${deck}`, h, p, nextH, ptDelta,
+          +        score: known(h, p), hitScore: known(nextH, p), ptScore: known(h, p + ptDelta),
+          +      };
+          +    })).flat();
+          +  const result = report('--labels', fixture(t, 'known.json', JSON.stringify(rows)));
+          +  assert.deepEqual(result.holdout.scoreHP, { scoreMAE: 0, hintMAE: 0, ptMAE: 0, regret: 0 });
+          +  for (const { metrics } of result.folds) {
+          +    const { r0, k, lambda } = metrics.scoreHP.params;
+          +    assert(Math.abs(r0 - 1.35) < 1e-10);
+          +    assert.equal(k, 4.5);
+          +    assert.equal(lambda, 0.35);
+          +  }
+          +});
+          +
+          +test('label mode rejects invalid or unpaired rows', t => {
+          +  const rows = labels();
+          +  const cases = [
+          +    [[rows[0], ...rows], /unique run/],
+          +    [rows.slice(0, 4), /at least three decks/],
+          +    [[{ ...rows[0], h: 1.5 }, ...rows.slice(1)], /invalid H or PT/],
+          +    [[{ ...rows[0], nextH: 0 }, ...rows.slice(1)], /invalid paired delta/],
+          +    [[{ ...rows[0], ptScore: 1 }, ...rows.slice(1)], /paired scores cannot decrease/],
+          +    [[{ ...rows[0], p: 0 }, ...rows.slice(1)], /zero PT cannot buy skills/],
+          +    [[{ ...rows[0], nextH: rows[0].h, hitScore: rows[0].score + 1 }, ...rows.slice(1)], /no Hint change/],
+          +  ];
+          +  for (const [invalid, message] of cases) {
+          +    const result = run('--labels', fixture(t, 'invalid.json', JSON.stringify(invalid)));
+          +    assert.notEqual(result.status, 0);
+          +    assert.match(result.stderr, message);
+          +  }
+          +});
+          HINT_PT_PATCH
+          expected=$(printf 'A\t%s\n' benchmark/_local/hint_pt/README.md scripts/hint_pt_model.cjs scripts/hint_pt_model.test.cjs)
+          test "$(git diff --cached --no-renames --name-status)" = "$expected"
+          git diff --cached --check
+
+      - name: Run the Hint/PT regression suite
+        run: node --test scripts/hint_pt_model.test.cjs
+
+      - name: Commit and publish the tested candidate once
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          git diff --quiet
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'Add offline white-skill Hint/PT model and regression tests'
+          gh auth setup-git --hostname github.com
+          git push --force-with-lease="$CANDIDATE_REF:" origin "HEAD:$CANDIDATE_REF"
+          printf 'Tested candidate: `%s` (`%s`)\n' "$CANDIDATE_REF" "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
